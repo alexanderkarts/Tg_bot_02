@@ -1,6 +1,8 @@
 import json
 import logging
 import re
+from datetime import datetime
+
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
@@ -16,6 +18,11 @@ from utils import full_stock, PHOTO_COLUMNS, NOT_SENT_COLUMNS
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+USERS_CHAT_ID = -5197732565
+TRACK_CHAT_ID = -5138434295
+
+USERS_FILE = "users.json"
+
 # ===== Настройка кнопок =====
 reply_keyboard = [
     ["Статистика"],
@@ -28,6 +35,19 @@ markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
 
 # ===== Google Sheets (lazy) =====
 _gs_sheet = None
+
+# async def debug_chat_id(update, context):
+#     chat = update.effective_chat
+#     user = update.effective_user
+#
+#     print("====== DEBUG INFO ======")
+#     print(f"Chat ID: {chat.id}")
+#     print(f"Chat type: {chat.type}")
+#     print(f"User: {user.full_name}")
+#     print("========================")
+#
+#     # Можно даже ответом в чат (удобно)
+#     await update.message.reply_text(f"Chat ID: {chat.id}")
 
 def get_sheet():
     global _gs_sheet
@@ -42,6 +62,46 @@ def get_sheet():
         client = gspread.authorize(creds)
         _gs_sheet = client.open_by_url(GOOGLE_SHEET_URL).sheet1
     return _gs_sheet
+
+def load_users():
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_users(users):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+async def register_user(update, context):
+    user = update.effective_user
+    users = load_users()
+
+    if not any(u["id"] == user.id for u in users):
+
+        users.append({
+            "id": user.id,
+            "username": user.username if user.username else "no_username",
+            "name": user.full_name
+        })
+
+        save_users(users)
+
+        await context.bot.send_message(
+            chat_id=USERS_CHAT_ID,
+            text=f"🆕 Новый пользователь\n{user.full_name} (@{user.username})"
+        )
+
+async def log_action(update, context, action: str):
+    user = update.effective_user
+    time = datetime.now().strftime("%H:%M:%S")
+
+    await context.bot.send_message(
+        chat_id=TRACK_CHAT_ID,
+        text=f"[{time}] 👤 {user.full_name}\nДействие: {action}"
+    )
+
 
 # ===== Кеш ключей =====
 KEYS_FILE = "keys.json"
@@ -145,6 +205,7 @@ def write_df_to_sheet(sheet, df: pd.DataFrame):
 
 # ===== Команды =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await register_user(update, context)
     await update.message.reply_text("Привет! Выберите действие:", reply_markup=markup)
 
 # ===== Главная обработка текста =====
@@ -161,6 +222,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== Кнопки меню =====
     if text == "Полный сток":
+        await log_action(update, context, "Полный сток")
         df_full = full_stock(df)
         file_path = "full_stock.xlsx"
         df_full.to_excel(file_path, index=False)
@@ -171,6 +233,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Авто без фото":
+        await log_action(update, context, "Авто без фото")
         df_photo = df[df["Кол-во фото для сайта"] == 0]
         df_photo = df_photo.sort_values(by="Дней с даты поступления", ascending=False)
         df_photo = df_photo[PHOTO_COLUMNS]
@@ -183,6 +246,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Авто без места хранения":
+        await log_action(update, context, "Авто без места хранения")
         df_full = full_stock(df)
         df_no_storage = df_full[
             (df_full["Место хранения"].isna() | (df_full["Место хранения"] == "")) &
@@ -197,6 +261,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Статистика":
+        await log_action(update, context, "Статистика")
         df_full = full_stock(df)
         total_stock = len(df_full)
         no_photo = len(df_full[df_full["Кол-во фото для сайта"] == 0])
@@ -212,6 +277,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Переданные авто":
+        await log_action(update, context, "Переданные авто")
         keys_data = load_keys()
         df_full = full_stock(df)
         # Переданными считаем только те авто, у которых совпадают И ключ, И VIN
@@ -242,6 +308,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Не переданные авто":
+        await log_action(update, context, "Не переданные авто")
         keys_data = load_keys()
         df_photo = df[df["Кол-во фото для сайта"] == 0].copy()
         # Не переданными считаем авто, у которых ключ не зарегистрирован
@@ -265,6 +332,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "Поиск ключа":
+        await log_action(update, context, "Поиск ключа")
         WAITING_KEY[update.message.chat_id] = True
         await update.message.reply_text("Введите номер ключа")
         return
@@ -301,6 +369,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message)
         return
 
+
     # ===== Обработка сообщений из группы: регистрация ключей =====
     if chat_type in ["group", "supergroup"] and text:
         key_numbers = extract_key_numbers(text)
@@ -333,6 +402,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("\n\n".join(responses))
         return
 
+async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    users = load_users()
+    await update.message.reply_text(f"👤 Пользователей: {len(users)}")
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = load_data()
+    await update.message.reply_text(f"📊 Машин в системе: {len(df)}")
 
 # ===== Запуск бота =====
 if __name__ == "__main__":
@@ -341,6 +417,9 @@ if __name__ == "__main__":
         exit(1)
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("users", users_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    # app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, debug_chat_id))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_text))
     logger.info("Бот запущен")
